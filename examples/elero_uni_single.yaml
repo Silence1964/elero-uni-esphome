@@ -1,0 +1,104 @@
+substitutions:
+  device_name: elero-uni-bridge
+  friendly_name: "Elero UNI Bridge"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  includes:
+    - components/elero_uni/elero_uni_remote.h
+
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          if (!elero_uni_remote::setup()) {
+            ESP_LOGE("elero.example", "Elero UNI radio setup failed");
+            return;
+          }
+
+          // IMPORTANT: choose your own unique three-byte sender ID BEFORE
+          // pairing. The values below are examples only.
+          // The initial rolling index is used only if this NVS key does not
+          // exist yet. Existing NVS always wins.
+          if (!elero_uni_remote::configure_remote(
+                  0, "Blind 1", "blind1_next", 1,
+                  0x20, 0x70, 0x55, 0xC0)) {
+            ESP_LOGE("elero.example", "Remote configuration failed");
+          }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+button:
+  - platform: template
+    name: "Elero UNI P / Pairing"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_pairing_p(0);
+
+  - platform: template
+    name: "Elero UNI UP"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_up(0);
+
+  - platform: template
+    name: "Elero UNI STOP"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_stop(0);
+
+  - platform: template
+    name: "Elero UNI DOWN"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_down(0);
+
+  - platform: template
+    name: "Elero UNI Print sender status"
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          elero_uni_remote::print_status(0);
+
+text_sensor:
+  - platform: template
+    name: "Elero UNI next rolling index"
+    entity_category: diagnostic
+    update_interval: 30s
+    lambda: |-
+      return elero_uni_remote::next_index_text(0);
+
+  - platform: template
+    name: "Elero UNI last TX"
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return elero_uni_remote::last_tx_text(0);
+
+binary_sensor:
+  - platform: template
+    name: "Elero UNI radio ready"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: |-
+      return elero_uni_remote::is_ready();
