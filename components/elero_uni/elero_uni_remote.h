@@ -24,17 +24,17 @@
 // ESPHome / ESP-IDF reference transmitter for the reverse-engineered
 // unidirectional Elero UNI 868 MHz protocol.
 //
-// RF timing, CC1101 registers and rolling-index handling are extracted from the
-// implementation that was validated on real Elero UNI receivers.
+// RF timing, CC1101 registers and rolling-index handling are extracted from
+// the implementation validated with real Elero UNI receivers.
 //
-// IMPORTANT: configure a unique sender identity before pairing. Never reset or
-// reuse the rolling index of an already paired virtual sender.
+// IMPORTANT: configure a unique sender identity before pairing. Never reset
+// or reuse the rolling index of an already paired virtual sender.
 
 namespace elero_uni_remote {
 
 static const char *const TAG = "elero.uni.tx";
 
-// Tested ESP32 DevKit wiring.
+// Tested classic ESP32 DevKit wiring.
 static constexpr int PIN_SCK = 18;
 static constexpr int PIN_MISO = 19;
 static constexpr int PIN_MOSI = 23;
@@ -44,6 +44,12 @@ static constexpr int PIN_GDO2 = 27;  // synchronous serial CLOCK
 
 static constexpr const char *NVS_NAMESPACE = "elero_uni_v1";
 static constexpr uint8_t MAX_REMOTES = 8;
+
+// 8 P/programming repetitions require 1,184 serial bits including the
+// validated lead-in/trailing/flush clocks, so 128 bytes would be too small.
+static constexpr size_t TX_GROUP_BYTES = 192;
+static_assert(TX_GROUP_BYTES * 8U >= 64U + 138U * 8U + 16U,
+              "TX buffer must fit the 8-repeat P/programming group");
 
 struct RegValue {
   uint8_t addr;
@@ -62,7 +68,7 @@ struct RemoteConfig {
 };
 
 struct TxGroup {
-  std::array<uint8_t, 128> bytes{};
+  std::array<uint8_t, TX_GROUP_BYTES> bytes{};
   uint16_t data_bits{0};
   uint16_t total_bits{0};
   bool ok{false};
@@ -95,9 +101,11 @@ class RadioGuard {
       locked_ = xSemaphoreTake(radio_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
     }
   }
+
   ~RadioGuard() {
     if (locked_ && radio_mutex != nullptr) xSemaphoreGive(radio_mutex);
   }
+
   explicit operator bool() const { return locked_; }
 
  private:
@@ -125,10 +133,12 @@ inline void spi_deselect_() {
 
 inline bool spi_transfer_(const uint8_t *tx, uint8_t *rx, size_t len) {
   if (spi_dev == nullptr || tx == nullptr || len == 0) return false;
+
   spi_transaction_t t{};
   t.length = len * 8U;
   t.tx_buffer = tx;
   t.rx_buffer = rx;
+
   const esp_err_t err = spi_device_polling_transmit(spi_dev, &t);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "SPI transfer: %s", esp_err_to_name(err));
@@ -174,15 +184,17 @@ inline bool cc_write_reg_(uint8_t addr, uint8_t value) {
 inline bool cc_write_burst_(uint8_t addr, const uint8_t *data, size_t len) {
   if (data == nullptr || len == 0 || len > 8) return false;
   if (!spi_select_()) return false;
+
   uint8_t tx[9]{};
   tx[0] = static_cast<uint8_t>(addr | 0x40U);
   for (size_t i = 0; i < len; i++) tx[i + 1] = data[i];
+
   const bool ok = spi_transfer_(tx, nullptr, len + 1);
   spi_deselect_();
   return ok;
 }
 
-// Register set from the validated 868.300 MHz synchronous serial sender.
+// Validated ~868.300 MHz synchronous serial 2-FSK register set.
 static constexpr RegValue REGS[] = {
     {0x0B,0x06},{0x0C,0x00},
     {0x0D,0x21},{0x0E,0x65},{0x0F,0x6A},
@@ -213,7 +225,8 @@ inline bool configure_radio_() {
   cc_strobe_(0x36);  // SIDLE
 
   for (const auto &r : REGS) {
-    if (r.addr >= 0x23 && r.addr <= 0x26) continue;  // FSCAL changes after SCAL
+    // FSCAL registers change as a result of SCAL.
+    if (r.addr >= 0x23 && r.addr <= 0x26) continue;
     if (cc_read_reg_(r.addr) != r.value) ok = false;
   }
   return ok;
@@ -221,6 +234,7 @@ inline bool configure_radio_() {
 
 inline bool append_bit_(TxGroup &g, bool bit) {
   if (g.total_bits >= g.bytes.size() * 8U) return false;
+
   if (bit) {
     g.bytes[g.total_bits >> 3] |=
         static_cast<uint8_t>(1U << (7U - (g.total_bits & 7U)));
@@ -241,29 +255,39 @@ inline bool build_group_(TxGroup &g, uint64_t code64, uint8_t repeats) {
   g.total_bits = 0;
   g.ok = false;
 
-  // Quiet lead-in used by the validated sender.
-  for (uint8_t i = 0; i < 32; i++) if (!append_bit_(g, 0)) return false;
+  // Quiet lead-in used by the validated transmitter.
+  for (uint8_t i = 0; i < 32; i++) {
+    if (!append_bit_(g, false)) return false;
+  }
 
   for (uint8_t r = 0; r < repeats; r++) {
     const uint8_t prefix[8] = {0,0,0,0,1,1,1,1};
-    for (uint8_t b : prefix) if (!append_bit_(g, b)) return false;
+    for (uint8_t b : prefix) {
+      if (!append_bit_(g, b != 0)) return false;
+    }
 
-    // First decoded logical bit is fixed to zero.
+    // Logical bit 0 is fixed to zero.
     if (!append_biphase_(g, false)) return false;
 
+    // Logical bits 1..64 are CODE64, MSB first.
     for (int bit = 63; bit >= 0; --bit) {
       if (!append_biphase_(g, ((code64 >> bit) & 1ULL) != 0)) return false;
     }
   }
 
-  for (uint8_t i = 0; i < 32; i++) if (!append_bit_(g, 0)) return false;
+  for (uint8_t i = 0; i < 32; i++) {
+    if (!append_bit_(g, false)) return false;
+  }
   g.data_bits = g.total_bits;
 
-  // The working transmitter appended 16 zero/invalid flush clocks.
-  for (uint8_t i = 0; i < 16; i++) if (!append_bit_(g, 0)) return false;
+  // Validated transmitter flushes 16 additional zero/invalid clocks.
+  for (uint8_t i = 0; i < 16; i++) {
+    if (!append_bit_(g, false)) return false;
+  }
 
-  g.ok = (g.data_bits == static_cast<uint16_t>(64U + 138U * repeats)) &&
-         (g.total_bits == static_cast<uint16_t>(g.data_bits + 16U));
+  g.ok =
+      (g.data_bits == static_cast<uint16_t>(64U + 138U * repeats)) &&
+      (g.total_bits == static_cast<uint16_t>(g.data_bits + 16U));
   return g.ok;
 }
 
@@ -328,6 +352,7 @@ inline bool transmit_group_(const TxGroup &g) {
 
   gpio_set_intr_type(static_cast<gpio_num_t>(PIN_GDO2), GPIO_INTR_NEGEDGE);
   gpio_intr_enable(static_cast<gpio_num_t>(PIN_GDO2));
+
   const uint64_t start = micros64_();
   cc_strobe_(0x35);  // STX
 
@@ -364,13 +389,15 @@ inline bool ensure_index_(uint8_t slot) {
                r.name, r.initial_index, r.initial_index);
     }
   }
+
   nvs_close(h);
   return err == ESP_OK;
 }
 
 inline bool peek_index(uint8_t slot, uint16_t *value) {
-  if (slot >= MAX_REMOTES || !remotes[slot].configured || value == nullptr)
+  if (slot >= MAX_REMOTES || !remotes[slot].configured || value == nullptr) {
     return false;
+  }
 
   nvs_handle_t h{};
   if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
@@ -382,7 +409,9 @@ inline bool peek_index(uint8_t slot, uint16_t *value) {
 inline bool reserve_pair_(uint8_t slot, uint16_t expected,
                           uint16_t *press, uint16_t *release) {
   if (slot >= MAX_REMOTES || !remotes[slot].configured ||
-      press == nullptr || release == nullptr) return false;
+      press == nullptr || release == nullptr) {
+    return false;
+  }
 
   nvs_handle_t h{};
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
@@ -390,6 +419,7 @@ inline bool reserve_pair_(uint8_t slot, uint16_t expected,
 
   uint16_t current = 0;
   err = nvs_get_u16(h, remotes[slot].nvs_key, &current);
+
   if (err == ESP_OK && current != expected) {
     ESP_LOGE(TAG, "%s: rolling-index race: expected %u, NVS %u; aborting",
              remotes[slot].name, expected, current);
@@ -405,6 +435,7 @@ inline bool reserve_pair_(uint8_t slot, uint16_t expected,
   nvs_close(h);
 
   if (err != ESP_OK) return false;
+
   *press = current;
   *release = static_cast<uint16_t>(current + 1U);
   return true;
@@ -478,7 +509,8 @@ inline bool setup() {
 
   const uint8_t partnum = cc_read_status_(0x30);
   const uint8_t version = cc_read_status_(0x31);
-  const bool chip_ok = partnum == 0x00 && version != 0x00 && version != 0xFF;
+  const bool chip_ok =
+      partnum == 0x00 && version != 0x00 && version != 0xFF;
 
   const bool codec_ok =
       elero_uni::encode_code64(1, elero_uni::CMD_UP, false,
@@ -488,19 +520,24 @@ inline bool setup() {
                                0x20, 0x70, 0x55, 0xC0).code64 ==
           0x83AB3F5001D7CC1DULL;
 
-  radio_ready = chip_ok && codec_ok && init_gpio_isr_() && configure_radio_();
+  radio_ready =
+      chip_ok && codec_ok && init_gpio_isr_() && configure_radio_();
 
   ESP_LOGW(TAG, "Elero UNI TX: %s | CC1101 PARTNUM=0x%02X VERSION=0x%02X",
            radio_ready ? "READY" : "ERROR", partnum, version);
   return radio_ready;
 }
 
-inline bool is_ready() { return radio_ready; }
+inline bool is_ready() {
+  return radio_ready;
+}
 
 inline bool send(uint8_t slot, uint8_t command, const char *command_name,
-                 uint8_t press_repeats = 3, uint8_t release_repeats = 3) {
-  if (!radio_ready || slot >= MAX_REMOTES || !remotes[slot].configured)
+                 uint8_t press_repeats = 3,
+                 uint8_t release_repeats = 3) {
+  if (!radio_ready || slot >= MAX_REMOTES || !remotes[slot].configured) {
     return false;
+  }
 
   RadioGuard guard(3000);
   if (!guard) {
@@ -532,8 +569,8 @@ inline bool send(uint8_t slot, uint8_t command, const char *command_name,
     return false;
   }
 
-  // Critical safety rule: reserve and commit both indexes BEFORE the first RF
-  // bit. A power loss may skip indexes, but cannot cause index reuse.
+  // Critical safety rule: reserve and commit both rolling indexes BEFORE the
+  // first RF bit. A power loss may skip indexes, but cannot cause index reuse.
   uint16_t reserved_press = 0;
   uint16_t reserved_release = 0;
   if (!reserve_pair_(slot, before, &reserved_press, &reserved_release)) {
@@ -542,9 +579,9 @@ inline bool send(uint8_t slot, uint8_t command, const char *command_name,
   }
 
   ESP_LOGW(TAG,
-      "%s -> %s | PRESS=%u RELEASE=%u | NEXT committed=%u",
-      r.name, command_name, reserved_press, reserved_release,
-      static_cast<uint16_t>(reserved_release + 1U));
+           "%s -> %s | PRESS=%u RELEASE=%u | NEXT committed=%u",
+           r.name, command_name, reserved_press, reserved_release,
+           static_cast<uint16_t>(reserved_release + 1U));
 
   const bool press_ok = transmit_group_(press_group);
   vTaskDelay(pdMS_TO_TICKS(10));
@@ -554,9 +591,11 @@ inline bool send(uint8_t slot, uint8_t command, const char *command_name,
   peek_index(slot, &next);
 
   char status[180];
-  std::snprintf(status, sizeof(status), "%s | %s | %s | %u/%u -> NEXT %u",
+  std::snprintf(status, sizeof(status),
+                "%s | %s | %s | %u/%u -> NEXT %u",
                 (press_ok && release_ok) ? "OK" : "TX ERROR",
-                r.name, command_name, reserved_press, reserved_release, next);
+                r.name, command_name,
+                reserved_press, reserved_release, next);
   last_tx[slot] = status;
   ESP_LOGW(TAG, "%s", last_tx[slot].c_str());
   return press_ok && release_ok;
@@ -565,12 +604,15 @@ inline bool send(uint8_t slot, uint8_t command, const char *command_name,
 inline bool send_up(uint8_t slot) {
   return send(slot, elero_uni::CMD_UP, "UP", 3, 3);
 }
+
 inline bool send_stop(uint8_t slot) {
   return send(slot, elero_uni::CMD_STOP, "STOP", 3, 3);
 }
+
 inline bool send_down(uint8_t slot) {
   return send(slot, elero_uni::CMD_DOWN, "DOWN", 3, 3);
 }
+
 inline bool send_pairing_p(uint8_t slot) {
   return send(slot, elero_uni::CMD_P, "P", 8, 3);
 }
@@ -578,13 +620,16 @@ inline bool send_pairing_p(uint8_t slot) {
 inline std::string next_index_text(uint8_t slot) {
   uint16_t value = 0;
   if (!peek_index(slot, &value)) return "unavailable";
+
   char text[32];
   std::snprintf(text, sizeof(text), "%u (0x%04X)", value, value);
   return text;
 }
 
 inline std::string last_tx_text(uint8_t slot) {
-  if (slot >= MAX_REMOTES || !remotes[slot].configured) return "unconfigured";
+  if (slot >= MAX_REMOTES || !remotes[slot].configured) {
+    return "unconfigured";
+  }
   return last_tx[slot];
 }
 
@@ -593,6 +638,7 @@ inline void print_status(uint8_t slot) {
     ESP_LOGW(TAG, "remote slot %u is not configured", slot);
     return;
   }
+
   const auto &r = remotes[slot];
   ESP_LOGW(TAG, "%s | TYPE=0x%02X ID=%02X:%02X:%02X | NEXT=%s",
            r.name, r.type, r.id0, r.id1, r.id2,
