@@ -1,0 +1,20 @@
+name: Protocol tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-codec:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run regression vectors
+        run: python tests/test_vectors.py
+      - name: Syntax-check tools
+        run: python -m py_compile tools/decode_code64.py tests/test_vectors.py
