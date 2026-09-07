@@ -2,27 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
-The project is currently in an experimental reverse-engineering phase. Until the complete transmitter implementation is published and independently validated, releases should be treated as previews rather than production-ready software.
-
 ## Unreleased
 
-### In progress
+- Independent testing on additional Elero UNI hardware is welcome.
+- Further characterization of TYPE / sender-ID allocation and receiver rolling windows remains open research.
 
-- Final real-hardware validation of the ESP32 + CC1101 transmitter implementation.
-- Regression testing of UP, STOP, DOWN and P/programming transmissions.
-- Validation of rolling-index persistence across reboots, crashes and firmware updates.
-- Multi-sender / multi-cover testing.
-- Final ESPHome and Home Assistant integration examples.
+## 0.2.0 - 2026-09-07
 
-### Intentionally not published yet
+First hardware-validated transmitter release.
 
-- Complete CC1101 transmitter implementation.
-- Complete ESPHome integration header.
-- Ready-to-flash ESPHome YAML configuration.
-- Final multi-sender / multi-cover example.
-- Final Home Assistant cover configuration.
+### Added
 
-These files will be published only after the remaining hardware tests have been completed successfully.
+- Complete ESP32 / ESP-IDF + CC1101 Elero UNI transmitter implementation.
+- Validated 868.300 MHz synchronous serial 2-FSK CC1101 configuration.
+- Safe NVS-backed rolling-index handling for multiple virtual sender slots.
+- Atomic pre-TX reservation of PRESS and RELEASE indexes before RF transmission.
+- UP, STOP, DOWN and P/programming transmit helpers.
+- 3 PRESS / 3 RELEASE repetitions for normal commands.
+- 8 PRESS / 3 RELEASE repetitions for P/programming.
+- ESPHome example with Home Assistant buttons and diagnostic entities.
+- Runtime CC1101 presence/configuration checks.
+- CODE64 self-test during radio setup.
+
+### Validated
+
+- Pairing of newly created independent virtual sender identities with real Elero UNI receivers.
+- UP, STOP and DOWN control from the generated virtual senders.
+- Repeated command sequences without losing rolling-index synchronization.
+- Persistence of the next rolling index across firmware operation/reboots.
+- Multi-sender operation in the completed installation.
+- Final implementation integrated successfully into the production ESPHome bridge used for the hardware tests.
+
+### Changed
+
+- Repository status changed from protocol-preview to working implementation.
+- README now contains installation and example configuration instructions.
+- The previously withheld transmitter header and ready-to-use ESPHome example are now published.
+
+### Safety
+
+- A command consumes two rolling indexes: PRESS uses `N`, RELEASE uses `N+1`, and `N+2` is committed to NVS before transmission begins.
+- Existing NVS values always take precedence over the configured initial seed.
+- Documentation explicitly warns against flash erasure, rolling-index rollback, or reuse after pairing.
+
+### Known limitations
+
+- This remains an unofficial community reverse-engineering project.
+- Only the unidirectional Elero UNI family tested by this project is in scope.
+- Complete TYPE / sender-ID allocation semantics are not known.
+- Receiver rolling-window size and every resynchronization edge case are not fully characterized.
 
 ## 0.1.0-protocol-preview - 2026-09-07
 
@@ -54,17 +82,3 @@ First public documentation preview of the reverse-engineered unidirectional Eler
 - Protocol findings were derived from captured RF transmissions and repeatedly checked against real hardware.
 - Generated UNI frames were accepted by real Elero UNI receivers during development.
 - Independent virtual sender identities could be learned by tested receivers when sender data, FLAGS and rolling indexes were generated consistently.
-
-### Changed
-
-- Repository positioning changed from a complete public-release draft to a **documentation / reverse-engineering preview**.
-- Ready-to-flash ESPHome example configuration was removed until final integration testing is complete.
-- README now clearly separates verified protocol findings from the still-under-test transmitter implementation.
-
-### Known limitations
-
-- This is not a complete specification for every Elero product family.
-- Bidirectional Elero packet formats are outside the scope of this repository.
-- Full TYPE and sender-ID allocation semantics are not yet known.
-- Receiver rolling-window size and all resynchronization behavior are not yet fully characterized.
-- The complete ESPHome/CC1101 transmitter implementation is not part of this preview release.
