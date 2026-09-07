@@ -6,6 +6,7 @@ esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   includes:
+    - components/elero_uni/elero_uni_protocol.h
     - components/elero_uni/elero_uni_remote.h
 
   on_boot:
