@@ -1,0 +1,9 @@
+.esphome/
+secrets.yaml
+*.bin
+*.elf
+*.map
+*.log
+.vscode/
+.idea/
+__pycache__/
