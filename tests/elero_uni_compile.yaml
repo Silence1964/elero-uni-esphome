@@ -1,0 +1,45 @@
+esphome:
+  name: elero-uni-ci
+  includes:
+    - components/elero_uni/elero_uni_remote.h
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          elero_uni_remote::setup();
+          elero_uni_remote::configure_remote(
+              0, "CI Remote", "ci_next", 1,
+              0x20, 0x70, 0x55, 0xC0);
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+button:
+  - platform: template
+    name: "CI UP"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_up(0);
+
+  - platform: template
+    name: "CI STOP"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_stop(0);
+
+  - platform: template
+    name: "CI DOWN"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_down(0);
+
+  - platform: template
+    name: "CI P"
+    on_press:
+      - lambda: |-
+          elero_uni_remote::send_pairing_p(0);
