@@ -1,0 +1,67 @@
+esphome:
+  name: elero-uni-reference
+  friendly_name: Elero UNI Reference
+  includes:
+    - components/elero_uni/elero_uni_remote.h
+
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - lambda: |-
+          elero_uni_remote.setup();
+
+  on_loop:
+    then:
+      - lambda: |-
+          elero_uni_remote.loop();
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+spi:
+  id: elero_spi
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+  interface: spi2
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+button:
+  - platform: template
+    name: "Elero UNI Pairing P"
+    on_press:
+      - lambda: elero_uni_remote.send_pairing_p();
+
+  - platform: template
+    name: "Elero UNI UP"
+    on_press:
+      - lambda: elero_uni_remote.send_up();
+
+  - platform: template
+    name: "Elero UNI STOP"
+    on_press:
+      - lambda: elero_uni_remote.send_stop();
+
+  - platform: template
+    name: "Elero UNI DOWN"
+    on_press:
+      - lambda: elero_uni_remote.send_down();
+
+  - platform: template
+    name: "Elero UNI Sender status"
+    on_press:
+      - lambda: elero_uni_remote.print_status();
