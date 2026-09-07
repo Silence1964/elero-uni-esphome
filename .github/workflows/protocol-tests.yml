@@ -1,4 +1,4 @@
-name: Protocol tests
+name: Protocol and ESPHome tests
 
 on:
   push:
@@ -18,3 +18,19 @@ jobs:
         run: python tests/test_vectors.py
       - name: Syntax-check tools
         run: python -m py_compile tools/decode_code64.py tests/test_vectors.py
+
+  build-esphome-example:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ESPHome
+        run: pip install esphome==2026.8.2
+      - name: Prepare compile-test configuration
+        run: cp tests/elero_uni_compile.yaml elero_uni_ci.yaml
+      - name: Compile ESPHome transmitter
+        run: esphome compile elero_uni_ci.yaml
